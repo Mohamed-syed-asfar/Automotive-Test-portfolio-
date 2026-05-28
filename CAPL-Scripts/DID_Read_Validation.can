@@ -1,0 +1,125 @@
+/*
+============================================
+Script  : DID Read Validation
+Service : UDS 0x22 - Read Data By Identifier
+Author  : Mohamed syed asfar
+Purpose : Automatically sends Read DID requests
+          for multiple DIDs and validates the
+          response length and positive response
+          code from the ECU.
+============================================
+*/
+
+variables
+{
+  msTimer requestTimer;       /* Timer to space out each request */
+  int currentDID = 0;         /* Tracks which DID we are testing */
+  
+  /* 
+  Define the DIDs you want to test.
+  These are example DID values — replace with 
+  your actual DID IDs from your spec document.
+  */
+  int DID_LIST[5] = {0x1234, 0x1235, 0x1236, 0x1237, 0x1238};
+  int DID_COUNT = 5;          /* Total number of DIDs to test */
+  
+  int passCount = 0;          /* Counts how many DIDs passed */
+  int failCount = 0;          /* Counts how many DIDs failed */
+}
+
+
+/*
+on start runs automatically when the 
+measurement starts in CANoe.
+*/
+on start
+{
+  write("===================================");
+  write("DID Read Validation Test Started");
+  write("===================================");
+  write("Total DIDs to test: %d", DID_COUNT);
+  write(" ");
+  
+  currentDID = 0;
+  setTimer(requestTimer, 500);  /* Start first request after 500ms */
+}
+
+
+/*
+on timer fires every time the timer expires.
+We send one DID request per timer cycle.
+*/
+on timer requestTimer
+{
+  byte request[3];   /* UDS request message — 3 bytes */
+  
+  /* Check if we have tested all DIDs */
+  if(currentDID >= DID_COUNT)
+  {
+    /* All DIDs tested — print final result */
+    write(" ");
+    write("===================================");
+    write("TEST COMPLETE");
+    write("PASS: %d | FAIL: %d | TOTAL: %d", 
+           passCount, failCount, DID_COUNT);
+    write("===================================");
+    stop();  /* Stop the measurement */
+    return;
+  }
+  
+  /*
+  Build the UDS 0x22 request:
+  Byte 0 = 0x22  (Service ID for Read DID)
+  Byte 1 = High byte of DID
+  Byte 2 = Low byte of DID
+  */
+  request[0] = 0x22;
+  request[1] = (DID_LIST[currentDID] >> 8) & 0xFF;  /* High byte */
+  request[2] = DID_LIST[currentDID] & 0xFF;          /* Low byte  */
+  
+  write("Requesting DID: 0x%04X", DID_LIST[currentDID]);
+  
+  /* Send the request on CAN — replace 0x7DF with your ECU request ID */
+  output(can0, 0x7DF, 8, request[0], request[1], request[2], 
+         0x00, 0x00, 0x00, 0x00, 0x00);
+  
+  setTimer(requestTimer, 1000);  /* Wait 1 second before next DID */
+}
+
+
+/*
+on message captures every message on the CAN bus.
+We filter for the ECU diagnostic response ID.
+Replace 0x7E8 with your actual ECU response ID.
+*/
+on message 0x7E8
+{
+  byte responseCode;
+  byte serviceID;
+  
+  responseCode = this.byte(0);  /* First byte of response */
+  serviceID    = this.byte(1);  /* Second byte = service echoed back */
+  
+  /*
+  UDS Positive Response for 0x22 = 0x62
+  If we receive 0x62 it means ECU responded correctly.
+  */
+  if(responseCode == 0x62)
+  {
+    write("DID 0x%04X --> PASS (Positive Response 0x62 received)", 
+           DID_LIST[currentDID]);
+    passCount++;
+  }
+  /*
+  UDS Negative Response code = 0x7F
+  If we receive 0x7F it means ECU rejected the request.
+  */
+  else if(responseCode == 0x7F)
+  {
+    write("DID 0x%04X --> FAIL (Negative Response 0x7F received)", 
+           DID_LIST[currentDID]);
+    failCount++;
+  }
+  
+  currentDID++;  /* Move to next DID */
+}
