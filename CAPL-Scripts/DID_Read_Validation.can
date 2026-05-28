@@ -15,23 +15,13 @@ variables
   msTimer requestTimer;       /* Timer to space out each request */
   int currentDID = 0;         /* Tracks which DID we are testing */
   
-  /* 
-  Define the DIDs you want to test.
-  These are example DID values — replace with 
-  your actual DID IDs from your spec document.
-  */
-  int DID_LIST[5] = {0x1234, 0x1235, 0x1236, 0x1237, 0x1238};
+  int DID_LIST[5] = {0xF180, 0xF184, 0xF199, 0xF195, 0x3020};
   int DID_COUNT = 5;          /* Total number of DIDs to test */
   
   int passCount = 0;          /* Counts how many DIDs passed */
   int failCount = 0;          /* Counts how many DIDs failed */
 }
 
-
-/*
-on start runs automatically when the 
-measurement starts in CANoe.
-*/
 on start
 {
   write("===================================");
@@ -44,11 +34,6 @@ on start
   setTimer(requestTimer, 500);  /* Start first request after 500ms */
 }
 
-
-/*
-on timer fires every time the timer expires.
-We send one DID request per timer cycle.
-*/
 on timer requestTimer
 {
   byte request[3];   /* UDS request message — 3 bytes */
