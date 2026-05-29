@@ -65,19 +65,14 @@ on timer requestTimer
   write("Requesting DID: 0x%04X", DID_LIST[currentDID]);
   
   /* Send the request on CAN — replace 0x7DF with your ECU request ID */
-  output(can0, 0x7DF, 8, request[0], request[1], request[2], 
+  output(can0, 0x7E5, 8, request[0], request[1], request[2], 
          0x00, 0x00, 0x00, 0x00, 0x00);
   
   setTimer(requestTimer, 1000);  /* Wait 1 second before next DID */
 }
 
 
-/*
-on message captures every message on the CAN bus.
-We filter for the ECU diagnostic response ID.
-Replace 0x7E8 with your actual ECU response ID.
-*/
-on message 0x7E8
+on message 0x7E5
 {
   byte responseCode;
   byte serviceID;
@@ -95,10 +90,7 @@ on message 0x7E8
            DID_LIST[currentDID]);
     passCount++;
   }
-  /*
-  UDS Negative Response code = 0x7F
-  If we receive 0x7F it means ECU rejected the request.
-  */
+  
   else if(responseCode == 0x7F)
   {
     write("DID 0x%04X --> FAIL (Negative Response 0x7F received)", 
