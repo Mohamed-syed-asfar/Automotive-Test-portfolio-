@@ -1,0 +1,164 @@
+/*
+============================================
+Script  : UDS Session Control Validation
+Service : UDS 0x10 - Diagnostic Session Control
+Author  : [Your Name]
+Purpose : Validates ECU behavior across all 
+          three UDS sessions — Default,
+          Extended, and Programming.
+          Checks positive and negative responses.
+============================================
+*/
+
+variables
+{
+  msTimer sessionTimer;      /* Timer between session requests */
+  int testStep = 0;          /* Tracks current test step */
+  int passCount = 0;
+  int failCount = 0;
+  
+  /*
+  UDS Session Types:
+  0x01 = Default Session
+  0x03 = Extended Diagnostic Session
+  0x02 = Programming Session
+  */
+}
+
+
+on start
+{
+  write("===================================");
+  write("Session Control Test Started");
+  write("Service 0x10 - Diagnostic Session Control");
+  write("===================================");
+  write(" ");
+  
+  testStep = 0;
+  setTimer(sessionTimer, 500);
+}
+
+
+on timer sessionTimer
+{
+  byte request[2];
+  request[0] = 0x10;   /* Service ID for Session Control */
+  
+  switch(testStep)
+  {
+    /*
+    STEP 0: Request Default Session (0x01)
+    ECU should always accept this — it is the 
+    base session every ECU starts in.
+    */
+    case 0:
+      request[1] = 0x01;
+      write("Step 1: Requesting Default Session (0x01)...");
+      output(can0, 0x7DF, 8, request[0], request[1],
+             0x00, 0x00, 0x00, 0x00, 0x00, 0x00);
+      setTimer(sessionTimer, 1000);
+      break;
+      
+    /*
+    STEP 1: Request Extended Diagnostic Session (0x03)
+    ECU should accept this for diagnostic access.
+    Required before writing DIDs or running routines.
+    */
+    case 1:
+      request[1] = 0x03;
+      write("Step 2: Requesting Extended Session (0x03)...");
+      output(can0, 0x7DF, 8, request[0], request[1],
+             0x00, 0x00, 0x00, 0x00, 0x00, 0x00);
+      setTimer(sessionTimer, 1000);
+      break;
+
+    /*
+    STEP 2: Request Programming Session (0x02)
+    ECU should accept this for flash programming.
+    Usually requires security access first.
+    */
+    case 2:
+      request[1] = 0x02;
+      write("Step 3: Requesting Programming Session (0x02)...");
+      output(can0, 0x7DF, 8, request[0], request[1],
+             0x00, 0x00, 0x00, 0x00, 0x00, 0x00);
+      setTimer(sessionTimer, 1000);
+      break;
+
+    /*
+    STEP 3: Negative test — Invalid session (0x05)
+    ECU should REJECT this with a 0x7F negative response.
+    This validates ECU handles unknown sessions correctly.
+    */
+    case 3:
+      request[1] = 0x05;
+      write("Step 4: Requesting Invalid Session (0x05) - Expect FAIL...");
+      output(can0, 0x7DF, 8, request[0], request[1],
+             0x00, 0x00, 0x00, 0x00, 0x00, 0x00);
+      setTimer(sessionTimer, 1000);
+      break;
+      
+    /*
+    All steps done — print summary
+    */
+    default:
+      write(" ");
+      write("===================================");
+      write("SESSION CONTROL TEST COMPLETE");
+      write("PASS: %d | FAIL: %d", passCount, failCount);
+      write("===================================");
+      stop();
+      break;
+  }
+}
+
+
+/*
+Listen for ECU response on 0x7E8.
+Positive response for 0x10 = 0x50
+Negative response = 0x7F
+*/
+on message 0x7E8
+{
+  byte responseCode;
+  responseCode = this.byte(0);
+  
+  /*
+  For steps 0, 1, 2 — we expect POSITIVE response 0x50
+  For step 3 (invalid session) — we expect NEGATIVE response 0x7F
+  */
+  if(testStep <= 2)
+  {
+    if(responseCode == 0x50)
+    {
+      write("Step %d --> PASS (Positive Response 0x50 received)", 
+             testStep + 1);
+      passCount++;
+    }
+    else
+    {
+      write("Step %d --> FAIL (Expected 0x50, got 0x%02X)", 
+             testStep + 1, responseCode);
+      failCount++;
+    }
+  }
+  else if(testStep == 3)
+  {
+    /* 
+    For invalid session — 0x7F is the CORRECT response.
+    ECU rejecting unknown session = expected behavior = PASS.
+    */
+    if(responseCode == 0x7F)
+    {
+      write("Step 4 (Negative Test) --> PASS (ECU correctly rejected invalid session)");
+      passCount++;
+    }
+    else
+    {
+      write("Step 4 (Negative Test) --> FAIL (ECU should have rejected this)");
+      failCount++;
+    }
+  }
+  
+  testStep++;  /* Move to next step */
+}
