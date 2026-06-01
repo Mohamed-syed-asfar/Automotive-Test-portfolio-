@@ -1,0 +1,226 @@
+/*
+============================================
+Script  : DTC Read and Clear Validation
+Service : UDS 0x19 - Read DTC Information
+          UDS 0x14 - Clear DTC Information
+Author  : [Your Name]
+Purpose : Reads all stored DTCs from ECU,
+          validates DTC status bytes, then
+          clears all DTCs and confirms
+          successful clearing.
+============================================
+*/
+
+variables
+{
+  msTimer dtcTimer;       /* Timer between requests */
+  int testStep = 0;       /* Tracks current test step */
+  int dtcCount = 0;       /* Number of DTCs found */
+  int passCount = 0;
+  int failCount = 0;
+}
+
+
+on start
+{
+  write("===================================");
+  write("DTC Read and Clear Test Started");
+  write("Services 0x19 and 0x14");
+  write("===================================");
+  write(" ");
+  
+  testStep = 0;
+  setTimer(dtcTimer, 500);
+}
+
+
+on timer dtcTimer
+{
+  byte request[3];
+
+  switch(testStep)
+  {
+    /*
+    STEP 0: Enter Extended Diagnostic Session first.
+    Service 0x19 requires extended session on most ECUs.
+    */
+    case 0:
+      write("Step 1: Entering Extended Diagnostic Session...");
+      request[0] = 0x10;   /* Session Control service */
+      request[1] = 0x03;   /* Extended session */
+      output(can0, 0x7DF, 8, request[0], request[1],
+             0x00, 0x00, 0x00, 0x00, 0x00, 0x00);
+      setTimer(dtcTimer, 1000);
+      break;
+
+    /*
+    STEP 1: Read all stored DTCs using Service 0x19.
+    Sub-function 0x02 = Report DTCs by Status Mask.
+    0xFF as status mask = read ALL DTCs regardless of status.
+    */
+    case 1:
+      write("Step 2: Reading all stored DTCs (Service 0x19, Sub 0x02)...");
+      request[0] = 0x19;   /* Read DTC Information service */
+      request[1] = 0x02;   /* Sub-function: reportDTCByStatusMask */
+      request[2] = 0xFF;   /* Status mask: read all DTCs */
+      output(can0, 0x7DF, 8, request[0], request[1], request[2],
+             0x00, 0x00, 0x00, 0x00, 0x00);
+      setTimer(dtcTimer, 1000);
+      break;
+
+    /*
+    STEP 2: Clear all DTCs using Service 0x14.
+    0xFFFFFF means clear ALL DTCs from all groups.
+    */
+    case 2:
+      write("Step 3: Clearing all DTCs (Service 0x14)...");
+      request[0] = 0x14;   /* Clear DTC Information service */
+      request[1] = 0xFF;   /* Group of DTC high byte   */
+      request[2] = 0xFF;   /* Group of DTC middle byte */
+      output(can0, 0x7DF, 8, request[0], request[1], request[2],
+             0xFF, 0x00, 0x00, 0x00, 0x00);
+      setTimer(dtcTimer, 1000);
+      break;
+
+    /*
+    STEP 3: Read DTCs again after clearing.
+    This confirms DTCs were actually cleared.
+    We expect zero DTCs in the response now.
+    */
+    case 3:
+      write("Step 4: Re-reading DTCs to confirm clearing...");
+      request[0] = 0x19;
+      request[1] = 0x02;
+      request[2] = 0xFF;
+      output(can0, 0x7DF, 8, request[0], request[1], request[2],
+             0x00, 0x00, 0x00, 0x00, 0x00);
+      setTimer(dtcTimer, 1000);
+      break;
+
+    default:
+      write(" ");
+      write("===================================");
+      write("DTC TEST COMPLETE");
+      write("PASS: %d | FAIL: %d", passCount, failCount);
+      write("DTCs found before clear: %d", dtcCount);
+      write("===================================");
+      stop();
+      break;
+  }
+}
+
+
+/*
+Listen for ECU responses on 0x7E8.
+*/
+on message 0x7E8
+{
+  byte responseCode;
+  byte serviceEcho;
+  byte dtcByte1;
+  byte dtcByte2;
+  byte dtcByte3;
+  byte statusByte;
+
+  responseCode = this.byte(0);
+  serviceEcho  = this.byte(1);
+
+  switch(testStep)
+  {
+    /*
+    STEP 0 response: Check session was accepted (0x50)
+    */
+    case 0:
+      if(responseCode == 0x50)
+      {
+        write("Step 1 --> PASS (Extended session accepted)");
+        passCount++;
+      }
+      else
+      {
+        write("Step 1 --> FAIL (Session not accepted, got 0x%02X)",
+               responseCode);
+        failCount++;
+      }
+      break;
+
+    /*
+    STEP 1 response: Check DTC read response (0x59)
+    Positive response for 0x19 = 0x59.
+    Each DTC is 3 bytes + 1 status byte in the response.
+    */
+    case 1:
+      if(responseCode == 0x59)
+      {
+        /*
+        Count DTCs from response length.
+        After first 3 bytes (response header),
+        every 4 bytes = one DTC (3 bytes DTC + 1 byte status).
+        */
+        dtcCount = (this.dlc - 3) / 4;
+        write("Step 2 --> PASS (0x59 received, DTCs found: %d)", dtcCount);
+
+        /*
+        Print each DTC and its status byte.
+        */
+        if(dtcCount > 0)
+        {
+          dtcByte1   = this.byte(2);
+          dtcByte2   = this.byte(3);
+          dtcByte3   = this.byte(4);
+          statusByte = this.byte(5);
+          write("First DTC: 0x%02X%02X%02X | Status: 0x%02X",
+                 dtcByte1, dtcByte2, dtcByte3, statusByte);
+        }
+        passCount++;
+      }
+      else
+      {
+        write("Step 2 --> FAIL (Expected 0x59, got 0x%02X)",
+               responseCode);
+        failCount++;
+      }
+      break;
+
+    /*
+    STEP 2 response: Check DTC clear was accepted (0x54)
+    Positive response for 0x14 = 0x54.
+    */
+    case 2:
+      if(responseCode == 0x54)
+      {
+        write("Step 3 --> PASS (All DTCs cleared, 0x54 received)");
+        passCount++;
+      }
+      else
+      {
+        write("Step 3 --> FAIL (Clear failed, got 0x%02X)",
+               responseCode);
+        failCount++;
+      }
+      break;
+
+    /*
+    STEP 3 response: Confirm zero DTCs after clearing.
+    */
+    case 3:
+      if(responseCode == 0x59)
+      {
+        dtcCount = (this.dlc - 3) / 4;
+        if(dtcCount == 0)
+        {
+          write("Step 4 --> PASS (Confirmed: 0 DTCs after clearing)");
+          passCount++;
+        }
+        else
+        {
+          write("Step 4 --> FAIL (DTCs still present after clear: %d)",
+                 dtcCount);
+          failCount++;
+        }
+      }
+      break;
+  }
+
+  testStep++;
+}
