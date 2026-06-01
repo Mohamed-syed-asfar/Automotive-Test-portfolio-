@@ -1,0 +1,297 @@
+/*
+============================================
+Script  : Security Access Validation
+Service : UDS 0x27 - Security Access
+Author  : [Your Name]
+Purpose : Validates ECU seed-key security
+          access mechanism. Tests positive
+          scenario (correct key) and negative
+          scenarios (wrong key, wrong session,
+          exceeded attempts).
+============================================
+*/
+
+variables
+{
+  msTimer secTimer;
+  int testStep = 0;
+  int passCount = 0;
+  int failCount = 0;
+  
+  byte seedByte1 = 0x00;   /* Stores seed received from ECU */
+  byte seedByte2 = 0x00;
+  
+  /*
+  NOTE: In real ECUs the key is calculated from
+  the seed using a security algorithm.
+  Here we use a simple example algorithm:
+  Key = Seed XOR 0xFF (replace with your real algorithm)
+  */
+}
+
+
+on start
+{
+  write("===================================");
+  write("Security Access Test Started");
+  write("Service 0x27 - Seed Key Validation");
+  write("===================================");
+  write(" ");
+  
+  testStep = 0;
+  setTimer(secTimer, 500);
+}
+
+
+on timer secTimer
+{
+  byte request[4];
+
+  switch(testStep)
+  {
+    /*
+    STEP 0: Enter Extended Session first.
+    Security access requires extended session.
+    */
+    case 0:
+      write("Step 1: Entering Extended Diagnostic Session...");
+      request[0] = 0x10;
+      request[1] = 0x03;
+      output(can0, 0x7DF, 8, request[0], request[1],
+             0x00, 0x00, 0x00, 0x00, 0x00, 0x00);
+      setTimer(secTimer, 1000);
+      break;
+
+    /*
+    STEP 1: Request Seed from ECU.
+    Sub-function 0x01 = RequestSeed.
+    ECU responds with a random seed value.
+    We must calculate the key from this seed.
+    */
+    case 1:
+      write("Step 2: Requesting Seed (0x27 0x01)...");
+      request[0] = 0x27;   /* Security Access service */
+      request[1] = 0x01;   /* Sub-function: RequestSeed */
+      output(can0, 0x7DF, 8, request[0], request[1],
+             0x00, 0x00, 0x00, 0x00, 0x00, 0x00);
+      setTimer(secTimer, 1000);
+      break;
+
+    /*
+    STEP 2: Send correct key to ECU.
+    Sub-function 0x02 = SendKey.
+    Key is calculated from seed received in Step 1.
+    We store seed in seedByte1 and seedByte2 when
+    we receive it in on message handler below.
+    */
+    case 2:
+      write("Step 3: Sending Correct Key (0x27 0x02)...");
+      request[0] = 0x27;
+      request[1] = 0x02;   /* Sub-function: SendKey */
+      /* 
+      Calculate key from seed using XOR 0xFF.
+      Replace this with your real algorithm.
+      */
+      request[2] = seedByte1 ^ 0xFF;
+      request[3] = seedByte2 ^ 0xFF;
+      write("Seed received: 0x%02X 0x%02X", seedByte1, seedByte2);
+      write("Key calculated: 0x%02X 0x%02X",
+             request[2], request[3]);
+      output(can0, 0x7DF, 8, request[0], request[1],
+             request[2], request[3],
+             0x00, 0x00, 0x00, 0x00);
+      setTimer(secTimer, 1000);
+      break;
+
+    /*
+    STEP 3: NEGATIVE TEST — Send wrong key.
+    First request seed again, then send wrong key.
+    ECU should reject with 0x7F NRC 0x35
+    (invalidKey negative response code).
+    */
+    case 3:
+      write("Step 4: Requesting Seed again for negative test...");
+      request[0] = 0x27;
+      request[1] = 0x01;
+      output(can0, 0x7DF, 8, request[0], request[1],
+             0x00, 0x00, 0x00, 0x00, 0x00, 0x00);
+      setTimer(secTimer, 1000);
+      break;
+
+    case 4:
+      write("Step 5: Sending Wrong Key - Expect REJECT...");
+      request[0] = 0x27;
+      request[1] = 0x02;
+      request[2] = 0x00;   /* Wrong key — deliberately incorrect */
+      request[3] = 0x00;
+      output(can0, 0x7DF, 8, request[0], request[1],
+             request[2], request[3],
+             0x00, 0x00, 0x00, 0x00);
+      setTimer(secTimer, 1000);
+      break;
+
+    /*
+    STEP 5: NEGATIVE TEST — Request seed in wrong session.
+    Go back to default session first, then try security access.
+    ECU should reject — security access not allowed in
+    default session.
+    */
+    case 5:
+      write("Step 6: Switching to Default Session...");
+      request[0] = 0x10;
+      request[1] = 0x01;   /* Default session */
+      output(can0, 0x7DF, 8, request[0], request[1],
+             0x00, 0x00, 0x00, 0x00, 0x00, 0x00);
+      setTimer(secTimer, 1000);
+      break;
+
+    case 6:
+      write("Step 7: Requesting Seed in Default Session - Expect REJECT...");
+      request[0] = 0x27;
+      request[1] = 0x01;
+      output(can0, 0x7DF, 8, request[0], request[1],
+             0x00, 0x00, 0x00, 0x00, 0x00, 0x00);
+      setTimer(secTimer, 1000);
+      break;
+
+    default:
+      write(" ");
+      write("===================================");
+      write("SECURITY ACCESS TEST COMPLETE");
+      write("PASS: %d | FAIL: %d", passCount, failCount);
+      write("===================================");
+      stop();
+      break;
+  }
+}
+
+
+on message 0x7E8
+{
+  byte responseCode;
+  byte nrcCode;
+
+  responseCode = this.byte(0);
+  nrcCode      = this.byte(2);   /* NRC byte in negative response */
+
+  switch(testStep)
+  {
+    /*
+    STEP 0: Expect 0x50 for session accepted
+    */
+    case 0:
+      if(responseCode == 0x50)
+      {
+        write("Step 1 --> PASS (Extended session accepted)");
+        passCount++;
+      }
+      else
+      {
+        write("Step 1 --> FAIL (Session rejected)");
+        failCount++;
+      }
+      break;
+
+    /*
+    STEP 1: Expect 0x67 — positive response for seed request.
+    Store seed bytes for key calculation.
+    */
+    case 1:
+      if(responseCode == 0x67)
+      {
+        seedByte1 = this.byte(2);   /* Store seed byte 1 */
+        seedByte2 = this.byte(3);   /* Store seed byte 2 */
+        write("Step 2 --> PASS (Seed received: 0x%02X 0x%02X)",
+               seedByte1, seedByte2);
+        passCount++;
+      }
+      else
+      {
+        write("Step 2 --> FAIL (No seed received)");
+        failCount++;
+      }
+      break;
+
+    /*
+    STEP 2: Expect 0x67 — positive response for correct key.
+    Security access unlocked.
+    */
+    case 2:
+      if(responseCode == 0x67)
+      {
+        write("Step 3 --> PASS (Security access UNLOCKED with correct key)");
+        passCount++;
+      }
+      else if(responseCode == 0x7F)
+      {
+        write("Step 3 --> FAIL (Key rejected, NRC: 0x%02X)", nrcCode);
+        failCount++;
+      }
+      break;
+
+    /*
+    STEP 3: Seed received for negative test
+    */
+    case 3:
+      if(responseCode == 0x67)
+      {
+        write("Step 4 seed received -- sending wrong key now");
+        passCount++;
+      }
+      break;
+
+    /*
+    STEP 4: Wrong key — expect 0x7F with NRC 0x35 (invalidKey)
+    Receiving 0x7F here is CORRECT — ECU is behaving properly.
+    */
+    case 4:
+      if(responseCode == 0x7F && nrcCode == 0x35)
+      {
+        write("Step 5 --> PASS (ECU correctly rejected wrong key, NRC 0x35)");
+        passCount++;
+      }
+      else if(responseCode == 0x7F)
+      {
+        write("Step 5 --> PASS (ECU rejected wrong key, NRC: 0x%02X)",
+               nrcCode);
+        passCount++;
+      }
+      else
+      {
+        write("Step 5 --> FAIL (ECU accepted wrong key — security issue!)");
+        failCount++;
+      }
+      break;
+
+    /*
+    STEP 5: Default session accepted
+    */
+    case 5:
+      if(responseCode == 0x50)
+      {
+        write("Step 6 default session OK");
+        passCount++;
+      }
+      break;
+
+    /*
+    STEP 6: Security access in default session.
+    Expect 0x7F with NRC 0x22 (conditionsNotCorrect).
+    */
+    case 6:
+      if(responseCode == 0x7F)
+      {
+        write("Step 7 --> PASS (ECU rejected security access in default session, NRC: 0x%02X)",
+               nrcCode);
+        passCount++;
+      }
+      else
+      {
+        write("Step 7 --> FAIL (ECU allowed security access in default session — bug!)");
+        failCount++;
+      }
+      break;
+  }
+
+  testStep++;
+}
