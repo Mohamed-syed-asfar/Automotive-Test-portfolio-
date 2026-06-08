@@ -34,7 +34,7 @@ Hands-on experience with:
 
 ## Tools & Technologies
 
-CANoe | CAPL | BusMaster | QGIS | JIRA | CAN Bus | UDS Protocol |
+CANoe | CAPL | PCANView | BusMaster | QGIS | JIRA | CAN Bus | UDS Protocol |
 CAN FD | OBD-II | ABS ECU Testing | Fault Injection | DID Validation
 
 ---
